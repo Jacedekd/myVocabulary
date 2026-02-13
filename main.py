@@ -287,6 +287,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     
     if data == "save_word":
+        # Гарантируем, что пользователь есть в базе перед сохранением
+        db.add_user(user_id, update.effective_user.username, update.effective_user.first_name)
+        
         # Сохранение слова
         word = context.user_data.get('last_word')
         explanation = context.user_data.get('last_explanation')
