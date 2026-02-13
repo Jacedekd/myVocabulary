@@ -30,7 +30,7 @@ if not check_environment():
     exit(1)
 
 # Инициализация
-db = Database()
+db = Database(os.getenv('DATABASE_URL'))
 
 # Конфигурация Gemini
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
