@@ -137,7 +137,7 @@ class Database:
             UPDATE users 
             SET is_subscribed = {placeholder}
             WHERE user_id = {placeholder}
-        """, (1 if subscribed else 0, user_id))
+        """, (subscribed, user_id))
         
         conn.commit()
         conn.close()
@@ -147,7 +147,6 @@ class Database:
         conn = self.get_connection()
         cursor = self.get_cursor(conn)
         
-        cursor.execute("SELECT user_id FROM users WHERE is_subscribed = %s" if self.is_postgres else "SELECT user_id FROM users WHERE is_subscribed = 1")
         if self.is_postgres:
             cursor.execute("SELECT user_id FROM users WHERE is_subscribed = TRUE")
         else:
