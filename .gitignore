@@ -1,0 +1,17 @@
+# ENV
+.env
+
+# Database
+vocabulary.db
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
+
+# OS
+.DS_Store
+
+# Logs
+*.log

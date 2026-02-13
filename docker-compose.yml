@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  # Telegram бот
+  bot:
+    build: .
+    container_name: vocabulary_bot
+    restart: unless-stopped
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - DATABASE_URL=postgresql://vocab_user:vocab_pass@postgres:5432/vocabulary_db
+    depends_on:
+      - postgres
+    volumes:
+      - ./data:/data
+    networks:
+      - vocabulary_network
+
+  # PostgreSQL база данных (опционально)
+  postgres:
+    image: postgres:15-alpine
+    container_name: vocabulary_postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=vocab_user
+      - POSTGRES_PASSWORD=vocab_pass
+      - POSTGRES_DB=vocabulary_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - vocabulary_network
+    ports:
+      - "5432:5432"
+
+volumes:
+  postgres_data:
+
+networks:
+  vocabulary_network:
+    driver: bridge

@@ -1,0 +1,9 @@
+python-telegram-bot[job-queue]==21.10
+google-generativeai==0.8.4
+python-dotenv==1.0.0
+
+# Опционально для PostgreSQL (если будешь использовать):
+# psycopg2-binary==2.9.9
+
+# Опционально для продакшена:
+# gunicorn==21.2.0
