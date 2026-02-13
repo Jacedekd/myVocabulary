@@ -206,7 +206,7 @@ async def daily_word_job(context: ContextTypes.DEFAULT_TYPE):
             context.application.user_data[user_id]['last_explanation'] = explanation
             
             # Кнопка сохранения
-            keyboard = [[InlineKeyboardButton("💾 Сохранить в словарь", callback_data=f"save_{word}")]]
+            keyboard = [[InlineKeyboardButton("💾 Сохранить в словарь", callback_data="save_word")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await context.bot.send_message(
@@ -263,7 +263,7 @@ async def handle_word(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Создаем клавиатуру с кнопкой сохранения
     keyboard = [
         [
-            InlineKeyboardButton("💾 Сохранить в словарь", callback_data=f"save_{word}")
+            InlineKeyboardButton("💾 Сохранить в словарь", callback_data="save_word")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -283,7 +283,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     data = query.data
     
-    if data.startswith("save_"):
+    if data == "save_word":
         # Сохранение слова
         word = context.user_data.get('last_word')
         explanation = context.user_data.get('last_explanation')
