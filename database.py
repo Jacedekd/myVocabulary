@@ -164,6 +164,13 @@ class Database:
         conn = self.get_connection()
         cursor = self.get_cursor(conn)
         
+        # FAIL-SAFE: Гарантируем наличие пользователя перед добавлением слова
+        # В Postgres это критично из-за Foreign Key
+        if self.is_postgres:
+            cursor.execute("INSERT INTO users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING", (user_id,))
+        else:
+            cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+            
         p = "%s" if self.is_postgres else "?"
         
         # Проверяем, есть ли уже такое слово у пользователя
