@@ -250,6 +250,9 @@ async def handle_word(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
+    # Гарантируем, что пользователь есть в базе (важно для Postgres)
+    db.add_user(user_id, update.effective_user.username, update.effective_user.first_name)
+    
     # Показываем индикатор печати
     await update.message.chat.send_action("typing")
     
