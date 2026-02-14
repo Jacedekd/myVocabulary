@@ -15,6 +15,7 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode
 import google.generativeai as genai
+from openai import OpenAI
 from database import Database
 from config import check_environment
 from markdown_converter import md_to_telegram_html
@@ -36,9 +37,13 @@ db = Database(os.getenv('DATABASE_URL'))
 # Конфигурация Gemini
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+# Инициализация Gemini
+genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
+model = genai.GenerativeModel('gemini-1.5-flash')
 
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-2.0-flash')
+# Инициализация OpenAI (опционально для fallback)
+openai_api_key = os.getenv('OPENAI_API_KEY')
+client_openai = OpenAI(api_key=openai_api_key) if openai_api_key else None
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -131,7 +136,8 @@ async def get_word_explanation(word: str) -> tuple[str, str]:
     "explanation": "Текст объяснения в формате Markdown"
 }}"""
 
-    max_retries = 3
+    # 1. Сначала пробуем Gemini
+    max_retries = 2
     for attempt in range(max_retries):
         try:
             response = model.generate_content(prompt)
@@ -151,14 +157,33 @@ async def get_word_explanation(word: str) -> tuple[str, str]:
             
         except Exception as e:
             error_msg = str(e)
-            if ("429" in error_msg or "Resource exhausted" in error_msg) and attempt < max_retries - 1:
-                wait_time = (attempt + 1) * 10
-                logger.warning(f"⚠️ Gemini API 429, ждем {wait_time}с...")
-                await asyncio.sleep(wait_time)
-                continue
+            logger.warning(f"Gemini error (Attempt {attempt+1}): {e}")
             
-            logger.error(f"Ошибка Gemini API: {e}")
-            return word, "⚠️ Произошла ошибка при получении объяснения. Попробуй через минуту."
+            # Если это 429 или это последняя попытка - пойдем в OpenAI или вернем ошибку
+            if "429" in error_msg or "Resource exhausted" in error_msg or attempt == max_retries - 1:
+                break
+            
+            await asyncio.sleep(2)
+            continue
+
+    # 2. Если Gemini подвел, пробуем OpenAI (если есть ключ)
+    if client_openai:
+        logger.info(f"🔄 Gemini 429! Используем OpenAI fallback для '{word}'")
+        try:
+            response = client_openai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"}
+            )
+            data = json.loads(response.choices[0].message.content)
+            norm_word = data.get('normalized_word', word)
+            explanation_html = md_to_telegram_html(data.get('explanation', "Ошибка получения объяснения"))
+            return norm_word, explanation_html
+        except Exception as oe:
+            logger.error(f"OpenAI fallback error: {oe}")
+
+    # 3. Если всё упало
+    return word, "ERROR_FALLBACK"
 
 
 async def get_smart_word_suggestion(existing_words: list) -> tuple[str, str] | None:
@@ -250,10 +275,15 @@ async def post_init(application: Application):
     ])
 
 
-async def handle_word(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_word(update: Update, context: ContextTypes.DEFAULT_TYPE, word: str = None):
     """Обработка слова от пользователя"""
     user_id = update.effective_user.id
-    word = update.message.text.strip()
+    
+    # Если слово не передано явно (не ретрай), берем из сообщения
+    if not word:
+        if not update.message or not update.message.text:
+            return
+        word = update.message.text.strip()
     
     # Проверяем, что это действительно слово (не длинный текст)
     if len(word.split()) > 3:
@@ -265,14 +295,30 @@ async def handle_word(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Гарантируем, что пользователь есть в базе (важно для Postgres)
     db.add_user(user_id, update.effective_user.username, update.effective_user.first_name)
     
-    # Показываем индикатор печати
-    await update.message.chat.send_action("typing")
+    # Показываем индикатор печати (в сообщении или в колбэке)
+    if update.message:
+        await update.message.chat.send_action("typing")
+    elif update.callback_query:
+        await update.callback_query.message.chat.send_action("typing")
     
     # Получаем объяснение и нормализованное слово
     normalized_word, explanation = await get_word_explanation(word)
     
+    if explanation == "ERROR_FALLBACK":
+        keyboard = [
+            [
+                InlineKeyboardButton("🔄 Повторить запрос", callback_data=f"retry_{word}")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            f"📖 <b>{word.upper()}</b>\n\n⚠️ Произошла ошибка при получении объяснения от всех доступных AI (Gemini/OpenAI).\nЭто может быть связано с перегрузкой серверов. Попробуйте нажать кнопку ниже через несколько секунд.",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.HTML
+        )
+        return
+
     # Сохраняем последнее слово в контекст для возможности сохранения
-    # Используем нормализованное слово, чтобы в базу попало "яблоко", а не "яблоками"
     context.user_data['last_word'] = normalized_word
     context.user_data['last_explanation'] = explanation
     
@@ -284,11 +330,22 @@ async def handle_word(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.message.reply_text(
-        f"📖 <b>{normalized_word.upper()}</b>\n\n{explanation}",
-        reply_markup=reply_markup,
-        parse_mode=ParseMode.HTML
-    )
+    # Отправка результата
+    reply_text = f"📖 <b>{normalized_word.upper()}</b>\n\n{explanation}"
+    
+    if update.message:
+        await update.message.reply_text(
+            reply_text,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.HTML
+        )
+    elif update.callback_query:
+        # Для ретрая отправляем новое сообщение (так проще и понятнее)
+        await update.callback_query.message.reply_text(
+            reply_text,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.HTML
+        )
 
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -314,6 +371,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             db.add_word(user_id, word, explanation)
         else:
             logger.warning(f"Failed optimistic save for user {user_id}: data missing")
+            
+    elif data.startswith("retry_"):
+        # Повторить запрос слова
+        word = data.replace("retry_", "")
+        await query.delete_message()
+        await handle_word(update, context, word=word)
+        return
             
     elif data == "noop":
          # Пустая заглушка для уже нажатых кнопок
