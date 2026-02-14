@@ -38,7 +38,7 @@ GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 # Инициализация Gemini
 genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-2.0-flash')
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -132,8 +132,8 @@ async def get_word_explanation(word: str) -> tuple[str, str]:
 }}"""
 
     # Сначалапробуем Gemini
-    max_retries = 3
-    for attempt in range(max_retries):
+    retry_delays = [10, 20, 30]
+    for attempt, delay in enumerate(retry_delays + [0]):
         try:
             response = model.generate_content(prompt)
             text = response.text
@@ -152,9 +152,9 @@ async def get_word_explanation(word: str) -> tuple[str, str]:
             
         except Exception as e:
             error_msg = str(e)
-            if ("429" in error_msg or "Resource exhausted" in error_msg) and attempt < max_retries - 1:
-                wait_time = (attempt + 1) * 5
-                logger.warning(f"⚠️ Gemini API 429, ждем {wait_time}с...")
+            if ("429" in error_msg or "Resource exhausted" in error_msg) and attempt < len(retry_delays):
+                wait_time = retry_delays[attempt]
+                logger.warning(f"⚠️ Gemini API 429, ждем {wait_time}с... (Попытка {attempt + 1})")
                 await asyncio.sleep(wait_time)
                 continue
             
