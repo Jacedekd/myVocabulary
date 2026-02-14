@@ -565,8 +565,14 @@ def main():
         url = os.getenv('RENDER_EXTERNAL_URL')
         
         async def health_check(request):
-            """Обработчик для пинга от cron-job.org или Render"""
-            return web.Response(text="OK", content_type="text/plain")
+            """Обработчик для пинга: будит и бота, и базу данных"""
+            try:
+                # Делаем фиктивный запрос к базе, чтобы Supabase не уснул
+                db.init_db() 
+                return web.Response(text="OK - Bot and DB are alive", content_type="text/plain")
+            except Exception as e:
+                logger.error(f"Health check DB error: {e}")
+                return web.Response(text="OK - Bot alive, DB error", content_type="text/plain")
 
         async def run_custom_webhook():
             """Запуск веб-сервера вручную для поддержки кастомных путей"""
