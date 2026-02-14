@@ -245,11 +245,11 @@ async def post_init(application: Application):
     """Установка команд бота при запуске"""
     await application.bot.set_my_commands([
         ("dictionary", "📚 Мой словарь"),
-        ("random", "🎲 Случайное слово"),
+        ("random", "✨ Новое умное слово"),
         ("stats", "📊 Статистика"),
         ("subscribe", "🔔 Включить умные слова"),
         ("unsubscribe", "🔕 Выключить умные слова"),
-        ("help", "ℹ️ Помощь"),
+        ("help", "❓ Помощь"),
         ("start", "👋 Перезапустить бота")
     ])
 
@@ -455,7 +455,7 @@ async def show_dictionary(update: Update, context: ContextTypes.DEFAULT_TYPE, pa
             
         # Доп. кнопки
         keyboard.append([
-            InlineKeyboardButton("🎲 Случайное слово", callback_data="random_word"),
+            InlineKeyboardButton("✨ Новое умное слово", callback_data="random_word"),
             InlineKeyboardButton("📊 Статистика", callback_data="show_stats")
         ])
         
@@ -486,40 +486,42 @@ async def dictionary_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def random_word_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получить случайное слово для повторения"""
+    """Получить новое умное слово от AI"""
+    # Определяем, откуда пришел запрос (команда или кнопка)
+    chat_id = update.effective_chat.id
     user_id = update.effective_user.id
-    word_data = db.get_random_word(user_id)
     
-    if not word_data:
-        await update.message.reply_text(
-            "📚 Твой словарь пуст. Сначала добавь несколько слов!"
-        )
-        return
+    # Показываем индикатор печати
+    await context.bot.send_action(chat_id=chat_id, action="typing")
     
-    text = f"""
-🎲 Случайное слово для повторения:
-
-{word_data['word'].upper()}
-
-{word_data['definition']}
-
-Добавлено: {word_data['created_at']}
-"""
+    # Берем слова для контекста, чтобы не повторяться
+    existing_words = db.get_user_words(user_id, limit=30)
     
-    keyboard = [[InlineKeyboardButton("🎲 Еще слово", callback_data="random_word")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    # Генерируем новое слово
+    suggestion = await get_smart_word_suggestion(existing_words)
     
-    if update.callback_query:
-        await update.callback_query.edit_message_text(
-            text,
+    if suggestion:
+        word, explanation = suggestion
+        
+        # Сохраняем в контекст для кнопки "Сохранить"
+        context.user_data['last_word'] = word
+        context.user_data['last_explanation'] = explanation
+        
+        keyboard = [[InlineKeyboardButton("💾 Сохранить в словарь", callback_data="save_word")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Если это была кнопка в словаре, можно было бы редактировать, 
+        # но лучше прислать новым сообщением, чтобы не терять словарь.
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"✨ <b>Рекомендация для тебя</b>\n\n📖 <b>{word.upper()}</b>\n\n{explanation}",
             reply_markup=reply_markup,
             parse_mode=ParseMode.HTML
         )
     else:
-        await update.message.reply_text(
-            text,
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.HTML
+        await context.bot.send_message(
+            chat_id=chat_id, 
+            text="⚠️ Не удалось придумать новое слово. Попробую позже!"
         )
 
 
