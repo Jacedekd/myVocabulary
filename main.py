@@ -3,6 +3,7 @@ import logging
 import asyncio
 import json
 from datetime import datetime, time, timezone
+from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -559,20 +560,51 @@ def main():
     
     # Запускаем бота
     if os.getenv('RENDER'):
-        # Настройки для Render (Webhooks)
+        # Настройки для Render (Webhooks + Health Check)
         port = int(os.getenv('PORT', 10000))
         url = os.getenv('RENDER_EXTERNAL_URL')
         
-        logger.info(f"🚀 Запуск в режиме Webhook на порту {port}")
-        logger.info(f"🔗 URL: {url}")
-        
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=port,
-            url_path=TELEGRAM_TOKEN,
-            webhook_url=f"{url}/{TELEGRAM_TOKEN}",
-            allowed_updates=Update.ALL_TYPES
-        )
+        async def health_check(request):
+            """Обработчик для пинга от cron-job.org или Render"""
+            return web.Response(text="OK", content_type="text/plain")
+
+        async def run_custom_webhook():
+            """Запуск веб-сервера вручную для поддержки кастомных путей"""
+            await application.initialize()
+            await application.start()
+            
+            # Создаем aiohttp приложение
+            app = web.Application()
+            app.router.add_get("/", health_check)
+            
+            # Обработчик вебхука Телеграма
+            async def telegram_webhook(request):
+                update = Update.de_json(await request.json(), application.bot)
+                await application.process_update(update)
+                return web.Response()
+
+            app.router.add_post(f"/{TELEGRAM_TOKEN}", telegram_webhook)
+            
+            runner = web.AppRunner(app)
+            await runner.setup()
+            site = web.TCPSite(runner, "0.0.0.0", port)
+            
+            logger.info(f"🚀 Запуск кастомного веб-сервера на порту {port}")
+            logger.info(f"🔗 Health check доступен по: {url}/")
+            
+            await site.start()
+            
+            # Держим процесс запущенным
+            try:
+                # Бесконечный цикл ожидания
+                while True:
+                    await asyncio.sleep(3600)
+            finally:
+                await application.stop()
+                await application.shutdown()
+
+        # Запускаем в текущем цикле событий
+        asyncio.get_event_loop().run_until_complete(run_custom_webhook())
     else:
         # Настройки для локальной разработки (Polling)
         logger.info("🤖 Запуск в режиме Polling")
