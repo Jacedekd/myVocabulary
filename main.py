@@ -174,25 +174,42 @@ async def get_word_explanation(word: str) -> tuple[str, str]:
 
 
 async def get_smart_word_suggestion(existing_words: list, exclude_words: list = None) -> tuple[str, str] | None:
-    """Генерация умного слова на основе контекста"""
+    """Генерация умного слова на основе контекста с защитой от повторений"""
     # Собираем список всех слов, которые нужно исключить
     context_words = [w['word'].lower() for w in existing_words] if existing_words else []
     if exclude_words:
         context_words.extend([w.lower() for w in exclude_words])
     
-    context_text = ", ".join(context_words) if context_words else "эмпатия, амбивалентность, когнитивный"
+    # Список клише "умных слов", которые часто предлагает AI по умолчанию
+    cliche_words = [
+        "эмпатия", "амбивалентность", "анамнез", "апроприация", "когнитивный", 
+        "интроспекция", "экзистенциальный", "парадигма", "дихотомия", "абстрактный",
+        "апробация", "рефлексия", "трансцендентный", "паллиатив", "эвфемизм"
+    ]
     
-    # Добавляем фактор случайности (текущее время до секунд)
-    random_seed = datetime.now().strftime("%H:%M:%S")
+    # Если словарь пуст, используем расширенный список клише как "уже известные", чтобы форсить новизну
+    if not context_words:
+        context_text = ", ".join(cliche_words)
+    else:
+        context_text = ", ".join(context_words)
+    
+    # Фактор случайности: выбираем случайную область знаний
+    themes = [
+        "Философия и логика", "Психология и нейронауки", "Социология и культура", 
+        "Лингвистика и литература", "Экономика и право", "Искусство и архитектура",
+        "Естественные науки", "Технологии и инновации", "Политология"
+    ]
+    random_theme = random.choice(themes)
+    random_seed = f"{datetime.now().strftime('%H:%M:%S')}-{random.randint(1, 1000)}"
     
     prompt = f"""
-    Ты - эксперт по русскому языку. Пользователь изучает сложные, "умные" слова. Текущее время засечки (для случайности): {random_seed}.
+    Ты - эксперт по русскому языку и эрудит. Твоя задача: предложить пользователю одно интересное, "умное", книжное или малоизвестное слово.
     
-    Его текущий словарный запас и недавно предложенные слова: {context_text}.
-    
-    Предложи 1 НОВОЕ слово, которого НЕТ в этом списке. 
-    БУДЬ ОРИГИНАЛЬНЫМ: не предлагай слова "амбивалентный", "эмпатия", "когнитивный", если они уже были или слишком очевидны.
-    Выбери что-то из разных областей: философия, наука, искусство, психология, литература.
+    УСЛОВИЯ:
+    1. Исключи из выбора следующие слова: {context_text}.
+    2. БУДЬ ОРИГИНАЛЬНЫМ. Не предлагай самые затертые "умные" слова вроде "эмпатия" или "апробация".
+    3. Сделай акцент на области: {random_theme}.
+    4. Случайное число для генерации: {random_seed}.
     
     {WORD_FORMAT_INSTRUCTIONS}
     
@@ -206,11 +223,11 @@ async def get_smart_word_suggestion(existing_words: list, exclude_words: list = 
     try:
         response = model.generate_content(prompt)
         text = response.text
-        # Очистка от markdown блоков json, если они есть
-        if text.startswith("```json"):
-            text = text.replace("```json", "").replace("```", "")
-        elif text.startswith("```"):
-            text = text.replace("```", "")
+        # Очистка от markdown блоков json
+        if "```json" in text:
+            text = text.split("```json")[1].split("```")[0]
+        elif "```" in text:
+            text = text.split("```")[1].split("```")[0]
             
         data = json.loads(text.strip())
         return data['word'], md_to_telegram_html(data['explanation'])
