@@ -276,9 +276,9 @@ async def handle_word(update: Update, context: ContextTypes.DEFAULT_TYPE, word: 
     
     # Показываем индикатор печати (в сообщении или в колбэке)
     if update.message:
-        await update.message.chat.send_action("typing")
+        await update.message.chat.send_chat_action("typing")
     elif update.callback_query:
-        await update.callback_query.message.chat.send_action("typing")
+        await update.callback_query.message.chat.send_chat_action("typing")
     
     # Получаем объяснение и нормализованное слово
     normalized_word, explanation = await get_word_explanation(word)
@@ -492,7 +492,7 @@ async def random_word_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = update.effective_user.id
     
     # Показываем индикатор печати
-    await context.bot.send_action(chat_id=chat_id, action="typing")
+    await context.bot.send_chat_action(chat_id=chat_id, action="typing")
     
     # Берем слова для контекста, чтобы не повторяться
     existing_words = db.get_user_words(user_id, limit=30)
