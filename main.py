@@ -64,7 +64,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /stats - 📊 Статистика
 /subscribe - 🔔 Включить умные слова
 /unsubscribe - 🔕 Выключить умные слова
-/help - ❓ Помощь
+/help - ℹ️ Помощь
 """
     await update.message.reply_text(welcome_text, parse_mode=ParseMode.HTML)
 
@@ -84,10 +84,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /stats - Твоя статистика 📊
 /subscribe - Включить ежедневную рассылку новых слов 🔔
 /unsubscribe - Выключить рассылку 🔕
-/help - Эта справка ❓
+/help - Эта справка ℹ️
 
 <b>Дополнительно:</b>
-• Можешь отправить предложение, и я найзу сложные слова
 • Все слова сохраняются в твой личный архив
 • Рассылка умных слов приходит каждые 3 часа с 6:00 до 21:00
 """
@@ -256,11 +255,11 @@ async def post_init(application: Application):
     """Установка команд бота при запуске"""
     await application.bot.set_my_commands([
         ("dictionary", "📚 Мой словарь"),
-        ("random", "✨ Новое умное слово"),
+        ("random", "✨ Новое слово"),
         ("stats", "📊 Статистика"),
         ("subscribe", "🔔 Включить умные слова"),
         ("unsubscribe", "🔕 Выключить умные слова"),
-        ("help", "❓ Помощь"),
+        ("help", "ℹ️ Помощь"),
         ("start", "👋 Перезапустить бота")
     ])
 
@@ -466,7 +465,7 @@ async def show_dictionary(update: Update, context: ContextTypes.DEFAULT_TYPE, pa
             
         # Доп. кнопки
         keyboard.append([
-            InlineKeyboardButton("✨ Новое умное слово", callback_data="random_word"),
+            InlineKeyboardButton("✨ Новое слово", callback_data="random_word"),
             InlineKeyboardButton("📊 Статистика", callback_data="show_stats")
         ])
         
