@@ -173,16 +173,26 @@ async def get_word_explanation(word: str) -> tuple[str, str]:
     return word, "ERROR_FALLBACK"
 
 
-async def get_smart_word_suggestion(existing_words: list) -> tuple[str, str] | None:
+async def get_smart_word_suggestion(existing_words: list, exclude_words: list = None) -> tuple[str, str] | None:
     """Генерация умного слова на основе контекста"""
-    context_text = ", ".join([w['word'] for w in existing_words]) if existing_words else "эмпатия, амбивалентность, когнитивный"
+    # Собираем список всех слов, которые нужно исключить
+    context_words = [w['word'].lower() for w in existing_words] if existing_words else []
+    if exclude_words:
+        context_words.extend([w.lower() for w in exclude_words])
+    
+    context_text = ", ".join(context_words) if context_words else "эмпатия, амбивалентность, когнитивный"
+    
+    # Добавляем фактор случайности (текущее время до секунд)
+    random_seed = datetime.now().strftime("%H:%M:%S")
     
     prompt = f"""
-    Ты - эксперт по русскому языку. Пользователь изучает сложные, "умные" слова.
+    Ты - эксперт по русскому языку. Пользователь изучает сложные, "умные" слова. Текущее время засечки (для случайности): {random_seed}.
     
-    Его текущий словарный запас включает: {context_text}.
+    Его текущий словарный запас и недавно предложенные слова: {context_text}.
     
-    Предложи 1 НОВОЕ слово, которого нет в этом списке, но которое подходит по стилю (интеллектуальное, книжное, научное или философское).
+    Предложи 1 НОВОЕ слово, которого НЕТ в этом списке. 
+    БУДЬ ОРИГИНАЛЬНЫМ: не предлагай слова "амбивалентный", "эмпатия", "когнитивный", если они уже были или слишком очевидны.
+    Выбери что-то из разных областей: философия, наука, искусство, психология, литература.
     
     {WORD_FORMAT_INSTRUCTIONS}
     
@@ -504,15 +514,24 @@ async def random_word_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Показываем индикатор печати
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
     
-    # Берем слова для контекста, чтобы не повторяться
+    # Инициализируем кэш предложенных слов в сессии, если его нет
+    if 'suggested_cache' not in context.user_data:
+        context.user_data['suggested_cache'] = []
+    
+    # Берем слова из базы для контекста
     existing_words = db.get_user_words(user_id, limit=30)
     
-    # Генерируем новое слово
-    suggestion = await get_smart_word_suggestion(existing_words)
+    # Генерируем новое слово, исключая и базу, и текущий кэш сессии
+    suggestion = await get_smart_word_suggestion(existing_words, exclude_words=context.user_data['suggested_cache'])
     
     if suggestion:
         word, explanation = suggestion
         
+        # Добавляем в кэш сессии (храним последние 15)
+        context.user_data['suggested_cache'].append(word)
+        if len(context.user_data['suggested_cache']) > 15:
+            context.user_data['suggested_cache'].pop(0)
+            
         # Сохраняем в контекст для кнопки "Сохранить"
         context.user_data['last_word'] = word
         context.user_data['last_explanation'] = explanation
