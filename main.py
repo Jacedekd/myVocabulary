@@ -337,18 +337,21 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_dictionary(update, context, page=page)
         
     elif data.startswith("view_word_"):
-        # Просмотр слова из словаря
-        word_id = int(data.split("_")[2])
+        # Просмотр слова из словаря (ИНЛАЙН - редактируем текущее сообщение)
+        parts = data.split("_")
+        word_id = int(parts[2])
+        page = int(parts[3]) if len(parts) > 3 else 0 # Запоминаем страницу
+        
         word_data = db.get_word_by_id(word_id)
         
         if word_data:
-            # Отправляем НОВЫМ сообщением, чтобы не терять список
-            # Кнопка "Удалить" вместо "Сохранить"
-            keyboard = [[InlineKeyboardButton("🗑️ Удалить", callback_data=f"delete_word_{word_id}")]]
+            keyboard = [
+                [InlineKeyboardButton("🗑️ Удалить", callback_data=f"delete_word_{word_id}_{page}")],
+                [InlineKeyboardButton("⬅️ Назад к списку", callback_data=f"dict_page_{page}")]
+            ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
+            await query.edit_message_text(
                 text=f"📖 <b>{word_data['word'].upper()}</b>\n\n{word_data['definition']}",
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.HTML
@@ -357,11 +360,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("Слово не найдено", show_alert=True)
 
     elif data.startswith("delete_word_"):
-        # Удаление слова
-        word_id = int(data.split("_")[2])
+        # Удаление слова (после удаления сразу возвращаемся к списку)
+        parts = data.split("_")
+        word_id = int(parts[2])
+        page = int(parts[3]) if len(parts) > 3 else 0
+        
         if db.delete_word(word_id, user_id):
             await query.answer("Слово удалено")
-            await query.delete_message()
+            # Сразу показываем обновленный список на этой же странице
+            await show_dictionary(update, context, page=page)
         else:
             await query.answer("Ошибка удаления", show_alert=True)
 
@@ -383,10 +390,10 @@ async def show_dictionary(update: Update, context: ContextTypes.DEFAULT_TYPE, pa
         text = f"📚 <b>Твой словарь (всего {total_words}):</b>\n\nВыберите слово, чтобы прочитать его значение:"
         
         keyboard = []
-        # Кнопки со словами
+        # Кнопки со словами (передаем текущую страницу, чтобы вернуться назад именно на неё)
         for word_data in words:
             keyboard.append([
-                InlineKeyboardButton(f"📖 {word_data['word']}", callback_data=f"view_word_{word_data['id']}")
+                InlineKeyboardButton(f"📖 {word_data['word']}", callback_data=f"view_word_{word_data['id']}_{page}")
             ])
             
         # Пагинация
