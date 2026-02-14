@@ -15,7 +15,6 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode
 import google.generativeai as genai
-from openai import OpenAI
 from database import Database
 from config import check_environment
 from markdown_converter import md_to_telegram_html
@@ -40,10 +39,6 @@ TELEGRAM_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 # Инициализация Gemini
 genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
 model = genai.GenerativeModel('gemini-1.5-flash')
-
-# Инициализация OpenAI (опционально для fallback)
-openai_api_key = os.getenv('OPENAI_API_KEY')
-client_openai = OpenAI(api_key=openai_api_key) if openai_api_key else None
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -136,8 +131,8 @@ async def get_word_explanation(word: str) -> tuple[str, str]:
     "explanation": "Текст объяснения в формате Markdown"
 }}"""
 
-    # 1. Сначала пробуем Gemini
-    max_retries = 2
+    # Сначалапробуем Gemini
+    max_retries = 3
     for attempt in range(max_retries):
         try:
             response = model.generate_content(prompt)
@@ -157,32 +152,16 @@ async def get_word_explanation(word: str) -> tuple[str, str]:
             
         except Exception as e:
             error_msg = str(e)
-            logger.warning(f"Gemini error (Attempt {attempt+1}): {e}")
+            if ("429" in error_msg or "Resource exhausted" in error_msg) and attempt < max_retries - 1:
+                wait_time = (attempt + 1) * 5
+                logger.warning(f"⚠️ Gemini API 429, ждем {wait_time}с...")
+                await asyncio.sleep(wait_time)
+                continue
             
-            # Если это 429 или это последняя попытка - пойдем в OpenAI или вернем ошибку
-            if "429" in error_msg or "Resource exhausted" in error_msg or attempt == max_retries - 1:
-                break
-            
-            await asyncio.sleep(2)
-            continue
+            logger.error(f"Ошибка Gemini API: {e}")
+            break
 
-    # 2. Если Gemini подвел, пробуем OpenAI (если есть ключ)
-    if client_openai:
-        logger.info(f"🔄 Gemini 429! Используем OpenAI fallback для '{word}'")
-        try:
-            response = client_openai.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"}
-            )
-            data = json.loads(response.choices[0].message.content)
-            norm_word = data.get('normalized_word', word)
-            explanation_html = md_to_telegram_html(data.get('explanation', "Ошибка получения объяснения"))
-            return norm_word, explanation_html
-        except Exception as oe:
-            logger.error(f"OpenAI fallback error: {oe}")
-
-    # 3. Если всё упало
+    # Если всё упало
     return word, "ERROR_FALLBACK"
 
 
@@ -312,7 +291,7 @@ async def handle_word(update: Update, context: ContextTypes.DEFAULT_TYPE, word: 
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(
-            f"📖 <b>{word.upper()}</b>\n\n⚠️ Произошла ошибка при получении объяснения от всех доступных AI (Gemini/OpenAI).\nЭто может быть связано с перегрузкой серверов. Попробуйте нажать кнопку ниже через несколько секунд.",
+            f"📖 <b>{word.upper()}</b>\n\n⚠️ Превышен лимит запросов к Google Gemini (ошибка 429).\nПопробуйте нажать кнопку ниже через 30-60 секунд.",
             reply_markup=reply_markup,
             parse_mode=ParseMode.HTML
         )
