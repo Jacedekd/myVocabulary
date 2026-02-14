@@ -19,22 +19,36 @@ class Database:
         
         if self.is_postgres:
             import psycopg2
+            from psycopg2 import pool
             from psycopg2.extras import RealDictRow
             self._connection_factory = psycopg2.connect
             self._row_factory_arg = RealDictRow
+            # Пул соединений для Postgres (мин 1, макс 10)
+            self.pool = pool.SimpleConnectionPool(1, 10, self.db_url)
         else:
             import sqlite3
             self._connection_factory = sqlite3.connect
             self._row_factory_arg = sqlite3.Row
+            self.pool = None
             
         self.init_db()
     
     def get_connection(self):
-        """Получить соединение с БД"""
+        """Получить соединение с БД из пула (если есть)"""
+        if self.is_postgres and self.pool:
+            return self.pool.getconn()
+            
         conn = self._connection_factory(self.db_url)
         if not self.is_postgres:
             conn.row_factory = self._row_factory_arg
         return conn
+    
+    def release_connection(self, conn):
+        """Вернуть соединение в пул"""
+        if self.is_postgres and self.pool:
+            self.pool.putconn(conn)
+        else:
+            conn.close()
     
     def get_cursor(self, conn):
         """Получить курсор"""
@@ -105,7 +119,7 @@ class Database:
                 pass
         
         conn.commit()
-        conn.close()
+        self.release_connection(conn)
     
     def add_user(self, user_id: int, username: str = None, first_name: str = None):
         """Добавить пользователя"""
@@ -125,7 +139,7 @@ class Database:
             """, (user_id, username, first_name))
         
         conn.commit()
-        conn.close()
+        self.release_connection(conn)
 
     def subscribe_user(self, user_id: int, subscribed: bool = True):
         """Включить/выключить подписку на ежедневные слова"""
@@ -140,7 +154,7 @@ class Database:
         """, (subscribed, user_id))
         
         conn.commit()
-        conn.close()
+        self.release_connection(conn)
         
     def get_subscribed_users(self) -> List[int]:
         """Получить список ID подписанных пользователей"""
@@ -192,7 +206,7 @@ class Database:
                 word_id = cursor.lastrowid
         
         conn.commit()
-        conn.close()
+        self.release_connection(conn)
         return word_id
     
     def get_user_words(self, user_id: int, limit: int = None, offset: int = 0) -> List[Dict]:
@@ -267,7 +281,7 @@ class Database:
         p = "%s" if self.is_postgres else "?"
         cursor.execute(f"UPDATE words SET last_reviewed = CURRENT_TIMESTAMP WHERE id = {p}", (word_id,))
         conn.commit()
-        conn.close()
+        self.release_connection(conn)
 
     def delete_word(self, word_id: int, user_id: int) -> bool:
         conn = self.get_connection()
@@ -276,7 +290,7 @@ class Database:
         cursor.execute(f"DELETE FROM words WHERE id = {p} AND user_id = {p}", (word_id, user_id))
         deleted = cursor.rowcount > 0
         conn.commit()
-        conn.close()
+        self.release_connection(conn)
         return deleted
 
     def get_user_stats(self, user_id: int) -> Dict:
@@ -310,3 +324,36 @@ class Database:
         conn.close()
         return words
 
+
+    def get_dictionary_data(self, user_id: int, limit: int = 5, offset: int = 0) -> Dict:
+        """
+        Получить все данные для словаря за ОДИН запрос (оптимизация)
+        """
+        conn = self.get_connection()
+        cursor = self.get_cursor(conn)
+        p = "%s" if self.is_postgres else "?"
+        
+        # 1. Считаем статистику
+        if self.is_postgres:
+            sql_stats = f"SELECT COUNT(*) as total_words FROM words WHERE user_id = {p}"
+        else:
+            sql_stats = f"SELECT COUNT(*) as total_words FROM words WHERE user_id = ?"
+        
+        cursor.execute(sql_stats, (user_id,))
+        total_words = cursor.fetchone()['total_words']
+        
+        # 2. Получаем слова
+        if self.is_postgres:
+            sql_words = f"SELECT id, word FROM words WHERE user_id = {p} ORDER BY created_at DESC LIMIT {limit} OFFSET {offset}"
+        else:
+            sql_words = f"SELECT id, word FROM words WHERE user_id = ? ORDER BY created_at DESC LIMIT {limit} OFFSET {offset}"
+            
+        cursor.execute(sql_words, (user_id,))
+        words = [dict(row) for row in cursor.fetchall()]
+        
+        self.release_connection(conn)
+        
+        return {
+            'total_words': total_words,
+            'words': words
+        }

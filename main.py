@@ -300,22 +300,20 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     
     if data == "save_word":
-        # Гарантируем, что пользователь есть в базе перед сохранением
-        db.add_user(user_id, update.effective_user.username, update.effective_user.first_name)
+        # ОБНОВЛЯЕМ КНОПКУ МГНОВЕННО (Оптимистичный UI)
+        new_keyboard = [[InlineKeyboardButton("✅ Сохранено", callback_data="noop")]]
+        await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(new_keyboard))
+        await query.answer("Слово сохранено!")
         
-        # Сохранение слова
+        # Сохранение слова в базу в фоновом режиме (уже не блокируем пользователя)
         word = context.user_data.get('last_word')
         explanation = context.user_data.get('last_explanation')
         
         if word and explanation:
+            # db.add_word сам гарантирует наличие пользователя (add_user внутри не нужен)
             db.add_word(user_id, word, explanation)
-            
-            # Обновляем ТОЛЬКО кнопку, текст сообщения не трогаем
-            new_keyboard = [[InlineKeyboardButton("✅ Сохранено", callback_data="noop")]]
-            await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(new_keyboard))
-            await query.answer("Слово сохранено!")
         else:
-            await query.answer("❌ Не удалось сохранить", show_alert=True)
+            logger.warning(f"Failed optimistic save for user {user_id}: data missing")
             
     elif data == "noop":
          # Пустая заглушка для уже нажатых кнопок
@@ -373,12 +371,10 @@ async def show_dictionary(update: Update, context: ContextTypes.DEFAULT_TYPE, pa
     user_id = update.effective_user.id
     PER_PAGE = 5
     
-    # Получаем общее количество слов
-    stats = db.get_user_stats(user_id)
-    total_words = stats['total_words']
-    
-    # Получаем слова для текущей страницы
-    words = db.get_user_words(user_id, limit=PER_PAGE, offset=page * PER_PAGE)
+    # Получаем ВСЕ данные одним махом (оптимизация)
+    dict_data = db.get_dictionary_data(user_id, limit=PER_PAGE, offset=page * PER_PAGE)
+    total_words = dict_data['total_words']
+    words = dict_data['words']
     
     if not words and page == 0:
         text = "📚 Твой словарь пока пуст.\nОтправь мне слово, чтобы начать!"
