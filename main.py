@@ -174,67 +174,33 @@ async def get_word_explanation(word: str) -> tuple[str, str]:
     return word, "ERROR_FALLBACK"
 
 
-async def get_smart_word_suggestion(existing_words: list, exclude_words: list = None) -> tuple[str, str] | None:
-    """Генерация умного слова на основе контекста с защитой от повторений"""
-    # Собираем список всех слов, которые нужно исключить
-    context_words = [w['word'].lower() for w in existing_words] if existing_words else []
-    if exclude_words:
-        context_words.extend([w.lower() for w in exclude_words])
+    # Ретраи с экспоненциальной задержкой
+    retry_delays = [10, 20, 30]
     
-    # Список клише "умных слов", которые часто предлагает AI по умолчанию
-    cliche_words = [
-        "эмпатия", "амбивалентность", "анамнез", "апроприация", "когнитивный", 
-        "интроспекция", "экзистенциальный", "парадигма", "дихотомия", "абстрактный",
-        "апробация", "рефлексия", "трансцендентный", "паллиатив", "эвфемизм"
-    ]
-    
-    # Если словарь пуст, используем расширенный список клише как "уже известные", чтобы форсить новизну
-    if not context_words:
-        context_text = ", ".join(cliche_words)
-    else:
-        context_text = ", ".join(context_words)
-    
-    # Фактор случайности: выбираем случайную область знаний
-    themes = [
-        "Философия и логика", "Психология и нейронауки", "Социология и культура", 
-        "Лингвистика и литература", "Экономика и право", "Искусство и архитектура",
-        "Естественные науки", "Технологии и инновации", "Политология"
-    ]
-    random_theme = random.choice(themes)
-    random_seed = f"{datetime.now().strftime('%H:%M:%S')}-{random.randint(1, 1000)}"
-    
-    prompt = f"""
-    Ты - эксперт по русскому языку и эрудит. Твоя задача: предложить пользователю одно интересное, "умное", книжное или малоизвестное слово.
-    
-    УСЛОВИЯ:
-    1. Исключи из выбора следующие слова: {context_text}.
-    2. БУДЬ ОРИГИНАЛЬНЫМ. Не предлагай самые затертые "умные" слова вроде "эмпатия" или "апробация".
-    3. Сделай акцент на области: {random_theme}.
-    4. Случайное число для генерации: {random_seed}.
-    
-    {WORD_FORMAT_INSTRUCTIONS}
-    
-    Ответ верни СТРОГО в формате JSON:
-    {{
-        "word": "СЛОВО",
-        "explanation": "Текст объяснения в формате Markdown"
-    }}
-    """
-    
-    try:
-        response = model.generate_content(prompt)
-        text = response.text
-        # Очистка от markdown блоков json
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0]
-        elif "```" in text:
-            text = text.split("```")[1].split("```")[0]
+    for attempt, delay in enumerate(retry_delays + [0]):
+        try:
+            response = model.generate_content(prompt)
+            text = response.text
+            # Очистка от markdown блоков json
+            if "```json" in text:
+                text = text.split("```json")[1].split("```")[0]
+            elif "```" in text:
+                text = text.split("```")[1].split("```")[0]
+                
+            data = json.loads(text.strip())
+            return data['word'], md_to_telegram_html(data['explanation'])
+        except Exception as e:
+            error_msg = str(e)
+            if ("429" in error_msg or "Resource exhausted" in error_msg) and attempt < len(retry_delays):
+                wait_time = retry_delays[attempt]
+                logger.warning(f"⚠️ API 429 при генерации предложения, ждем {wait_time}с... (Попытка {attempt + 1})")
+                await asyncio.sleep(wait_time)
+                continue
+                
+            logger.error(f"Ошибка генерации умного слова: {e}")
+            break
             
-        data = json.loads(text.strip())
-        return data['word'], md_to_telegram_html(data['explanation'])
-    except Exception as e:
-        logger.error(f"Ошибка генерации умного слова: {e}")
-        return None
+    return None
 
 
 async def daily_word_job(context: ContextTypes.DEFAULT_TYPE):
@@ -252,25 +218,8 @@ async def daily_word_job(context: ContextTypes.DEFAULT_TYPE):
                 
             word, explanation = suggestion
             
-            # Сохраняем данные в кэш для кнопки "Сохранить"
-            # В некоторых случаях (особенно в Job Queue) user_data может вести себя как mappingproxy
-            try:
-                # Пытаемся получить или создать словарь пользователя
-                if user_id not in context.application.user_data:
-                    context.application.user_data[user_id] = {}
-                
-                target_data = context.application.user_data[user_id]
-                # Если это всё еще прокси, пытаемся обновить через присвоение всего словаря
-                if isinstance(target_data, dict):
-                    target_data['last_word'] = word
-                    target_data['last_explanation'] = explanation
-                else:
-                    new_data = dict(target_data)
-                    new_data['last_word'] = word
-                    new_data['last_explanation'] = explanation
-                    context.application.user_data[user_id] = new_data
-            except Exception as ue:
-                logger.warning(f"⚠️ Не удалось обновить кэш user_data для {user_id}: {ue}. Type object: {type(context.application.user_data)}")
+            # Сохраняем данные в кэш БД (решает проблему mappingproxy)
+            db.save_pending_suggestion(user_id, word, explanation)
             
             # Кнопка сохранения
             keyboard = [[InlineKeyboardButton("💾 Сохранить в словарь", callback_data="save_word")]]
@@ -396,11 +345,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         word = context.user_data.get('last_word')
         explanation = context.user_data.get('last_explanation')
         
+        if not word or not explanation:
+            # Fallback: пробуем взять из БД, если память бота пуста
+            pending = db.get_pending_suggestion(user_id)
+            if pending:
+                word = pending['word']
+                explanation = pending['definition']
+        
         if word and explanation:
             # db.add_word сам гарантирует наличие пользователя (add_user внутри не нужен)
             db.add_word(user_id, word, explanation)
         else:
-            logger.warning(f"Failed optimistic save for user {user_id}: data missing")
+            logger.warning(f"Failed save for user {user_id}: data missing in memory and DB")
             
     elif data.startswith("retry_"):
         # Повторить запрос слова
@@ -563,9 +519,10 @@ async def random_word_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         if len(context.user_data['suggested_cache']) > 15:
             context.user_data['suggested_cache'].pop(0)
             
-        # Сохраняем в контекст для кнопки "Сохранить"
+        # Сохраняем в контекст и в БД для надежности кнопки "Сохранить"
         context.user_data['last_word'] = word
         context.user_data['last_explanation'] = explanation
+        db.save_pending_suggestion(user_id, word, explanation)
         
         keyboard = [[InlineKeyboardButton("💾 Сохранить в словарь", callback_data="save_word")]]
         reply_markup = InlineKeyboardMarkup(keyboard)

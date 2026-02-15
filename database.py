@@ -109,6 +109,24 @@ class Database:
             """
             cursor.execute(word_table_sql)
             
+            # Таблица временных предложений (для решения проблемы mappingproxy)
+            pending_table_sql = """
+                CREATE TABLE IF NOT EXISTS pending_suggestions (
+                    user_id BIGINT PRIMARY KEY,
+                    word TEXT NOT NULL,
+                    definition TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """ if self.is_postgres else """
+                CREATE TABLE IF NOT EXISTS pending_suggestions (
+                    user_id INTEGER PRIMARY KEY,
+                    word TEXT NOT NULL,
+                    definition TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """
+            cursor.execute(pending_table_sql)
+            
             # Индексы
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_words ON words(user_id, created_at DESC)")
             
@@ -356,5 +374,40 @@ class Database:
                 'total_words': total_words,
                 'words': words
             }
+        finally:
+            self.release_connection(conn)
+
+    def save_pending_suggestion(self, user_id: int, word: str, definition: str):
+        """Сохранить последнее предложенное слово (кэш в БД)"""
+        conn = self.get_connection()
+        try:
+            cursor = self.get_cursor(conn)
+            p = "%s" if self.is_postgres else "?"
+            
+            if self.is_postgres:
+                cursor.execute("""
+                    INSERT INTO pending_suggestions (user_id, word, definition, created_at)
+                    VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (user_id) DO UPDATE 
+                    SET word = EXCLUDED.word, definition = EXCLUDED.definition, created_at = CURRENT_TIMESTAMP
+                """, (user_id, word, definition))
+            else:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO pending_suggestions (user_id, word, definition, created_at)
+                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                """, (user_id, word, definition))
+            conn.commit()
+        finally:
+            self.release_connection(conn)
+
+    def get_pending_suggestion(self, user_id: int) -> Optional[Dict]:
+        """Получить последнее предложенное слово из кэша БД"""
+        conn = self.get_connection()
+        try:
+            cursor = self.get_cursor(conn)
+            p = "%s" if self.is_postgres else "?"
+            cursor.execute(f"SELECT word, definition FROM pending_suggestions WHERE user_id = {p}", (user_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
         finally:
             self.release_connection(conn)
