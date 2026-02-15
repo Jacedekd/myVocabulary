@@ -252,12 +252,25 @@ async def daily_word_job(context: ContextTypes.DEFAULT_TYPE):
                 
             word, explanation = suggestion
             
-            # Сохраняем в user_data (если используется persistence, или в памяти)
-            if not context.application.user_data.get(user_id):
-                context.application.user_data[user_id] = {}
-            
-            context.application.user_data[user_id]['last_word'] = word
-            context.application.user_data[user_id]['last_explanation'] = explanation
+            # Сохраняем данные в кэш для кнопки "Сохранить"
+            # В некоторых случаях (особенно в Job Queue) user_data может вести себя как mappingproxy
+            try:
+                # Пытаемся получить или создать словарь пользователя
+                if user_id not in context.application.user_data:
+                    context.application.user_data[user_id] = {}
+                
+                target_data = context.application.user_data[user_id]
+                # Если это всё еще прокси, пытаемся обновить через присвоение всего словаря
+                if isinstance(target_data, dict):
+                    target_data['last_word'] = word
+                    target_data['last_explanation'] = explanation
+                else:
+                    new_data = dict(target_data)
+                    new_data['last_word'] = word
+                    new_data['last_explanation'] = explanation
+                    context.application.user_data[user_id] = new_data
+            except Exception as ue:
+                logger.warning(f"⚠️ Не удалось обновить кэш user_data для {user_id}: {ue}. Type object: {type(context.application.user_data)}")
             
             # Кнопка сохранения
             keyboard = [[InlineKeyboardButton("💾 Сохранить в словарь", callback_data="save_word")]]
